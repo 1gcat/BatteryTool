@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="BatteryTool.Checks/BatteryTool.Checks.csproj" />
+  <Project Path="BatteryTool.Core/BatteryTool.Core.csproj" />
+  <Project Path="BatteryTool.Winform/BatteryTool.Winform.csproj" />
+</Solution>

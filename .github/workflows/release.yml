@@ -1,0 +1,161 @@
+name: Release / 发布
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. v1.2.3 (creates a GitHub Release) / 版本号，例如 v1.2.3（会据此创建 GitHub Release）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PROJECT: BatteryTool.Winform/BatteryTool.Winform.csproj
+      RID: win-x64
+    steps:
+      - name: Checkout / 检出代码
+        uses: actions/checkout@v4
+
+      - name: Setup .NET / 安装 .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Resolve version / 解析版本
+        id: ver
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $raw = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_VERSION } else { $env:REF_NAME }
+          $raw = $raw.Trim()
+          if ($raw -notmatch '^v?\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$') {
+            throw "Invalid version '$raw'. Use v1.2.3"
+          }
+          $tag = if ($raw.StartsWith('v')) { $raw } else { "v$raw" }
+          $version = $tag.Substring(1)
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Release tag=$tag version=$version"
+
+      - name: Publish framework-dependent / 发布依赖框架版
+        run: |
+          dotnet publish $env:PROJECT `
+            -c Release `
+            -r $env:RID `
+            --self-contained false `
+            -p:AssemblyName=BatteryTool `
+            -p:Version=${{ steps.ver.outputs.version }} `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
+            -o artifacts/framework
+
+      - name: Publish self-contained / 发布独立版
+        run: |
+          dotnet publish $env:PROJECT `
+            -c Release `
+            -r $env:RID `
+            --self-contained true `
+            -p:AssemblyName=BatteryTool `
+            -p:Version=${{ steps.ver.outputs.version }} `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
+            -o artifacts/self-contained
+
+      - name: Publish single-file / 发布单文件版
+        run: |
+          dotnet publish $env:PROJECT `
+            -c Release `
+            -r $env:RID `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:IncludeAllContentForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:AssemblyName=BatteryTool `
+            -p:Version=${{ steps.ver.outputs.version }} `
+            -p:DebugType=none `
+            -p:DebugSymbols=false `
+            -o artifacts/single-file
+
+      - name: Package artifacts and SHA256 / 打包并生成 SHA256
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          Get-ChildItem artifacts -Recurse -Include *.pdb | Remove-Item -Force -ErrorAction SilentlyContinue
+          Copy-Item LICENSE artifacts/framework/LICENSE
+          Copy-Item LICENSE artifacts/self-contained/LICENSE
+
+          $frameworkZip = "dist/BatteryTool-$env:VERSION-win-x64-framework.zip"
+          $selfContainedZip = "dist/BatteryTool-$env:VERSION-win-x64-self-contained.zip"
+          $singleFileExe = "dist/BatteryTool-$env:VERSION-win-x64.exe"
+
+          Compress-Archive -Path artifacts/framework/* -DestinationPath $frameworkZip -Force
+          Compress-Archive -Path artifacts/self-contained/* -DestinationPath $selfContainedZip -Force
+
+          $exe = Get-ChildItem artifacts/single-file -Filter *.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Single-file publish did not produce an .exe' }
+          Copy-Item $exe.FullName $singleFileExe
+
+          $checksumPath = 'dist/SHA256SUMS.txt'
+          Get-ChildItem dist -File |
+            Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            } |
+            Set-Content -Path $checksumPath -Encoding utf8NoBOM
+
+          Get-ChildItem dist | Format-Table Name, Length
+          Get-Content $checksumPath
+
+      - name: Write release notes / 生成发行说明
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          @"
+          ## 下载 / Downloads (Windows x64)
+
+          | 文件 / File | 版本 / Variant | 说明 / Notes |
+          | --- | --- | --- |
+          | ``BatteryTool-$env:VERSION-win-x64-framework.zip`` | 依赖框架 / Framework-dependent | 体积最小。需安装 [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)（Windows x64）。 / Smallest. Requires the .NET 10 Desktop Runtime (Windows x64). |
+          | ``BatteryTool-$env:VERSION-win-x64-self-contained.zip`` | 独立发布 / Self-contained | 自带运行时，解压即可运行，不必另装 .NET。 / Includes the runtime. Unzip and run; no extra .NET install. |
+          | ``BatteryTool-$env:VERSION-win-x64.exe`` | 单个文件 / Single-file | 独立的单文件构建，下载后直接运行。 / Self-contained one-file build. Download and run. |
+
+          校验 / Checksums: ``SHA256SUMS.txt`` (SHA-256)。不提供 32 位版本。 / 32-bit builds are not provided.
+          "@ | Set-Content -Path dist/RELEASE_NOTES.md -Encoding utf8NoBOM
+
+      - name: Create GitHub Release / 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: BatteryTool ${{ steps.ver.outputs.tag }}
+          body_path: dist/RELEASE_NOTES.md
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/BatteryTool-${{ steps.ver.outputs.version }}-win-x64-framework.zip
+            dist/BatteryTool-${{ steps.ver.outputs.version }}-win-x64-self-contained.zip
+            dist/BatteryTool-${{ steps.ver.outputs.version }}-win-x64.exe
+            dist/SHA256SUMS.txt
