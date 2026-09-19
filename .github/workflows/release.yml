@@ -61,7 +61,6 @@ jobs:
             -c Release `
             -r $env:RID `
             --self-contained false `
-            -p:AssemblyName=BatteryTool `
             -p:Version=${{ steps.ver.outputs.version }} `
             -p:DebugType=none `
             -p:DebugSymbols=false `
@@ -73,7 +72,6 @@ jobs:
             -c Release `
             -r $env:RID `
             --self-contained true `
-            -p:AssemblyName=BatteryTool `
             -p:Version=${{ steps.ver.outputs.version }} `
             -p:DebugType=none `
             -p:DebugSymbols=false `
@@ -89,7 +87,6 @@ jobs:
             -p:IncludeNativeLibrariesForSelfExtract=true `
             -p:IncludeAllContentForSelfExtract=true `
             -p:EnableCompressionInSingleFile=true `
-            -p:AssemblyName=BatteryTool `
             -p:Version=${{ steps.ver.outputs.version }} `
             -p:DebugType=none `
             -p:DebugSymbols=false `
