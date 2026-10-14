@@ -12,6 +12,7 @@ public partial class Form1 : Form
     private bool _initializing = true;
     private bool _busy;
     private bool _exiting;
+    private bool _startupQueued;
     private Icon? _trayIcon;
     private IReadOnlyList<BatteryDisplay> _lastDisplays = Array.Empty<BatteryDisplay>();
     private ToolStripMenuItem _menuShow = null!;
@@ -43,14 +44,39 @@ public partial class Form1 : Form
         _initializing = false;
     }
 
+    /// <summary>
+    /// When starting minimized, swallow Application.Run's first Show so the
+    /// window never becomes visible (Hide-after-Show flashes for one frame).
+    /// Later Show() calls (tray double-click) still work because the handle exists.
+    /// </summary>
+    protected override void SetVisibleCore(bool value)
+    {
+        if (_settings.StartMinimized && !IsHandleCreated)
+        {
+            CreateHandle();
+            value = false;
+            base.SetVisibleCore(value);
+            QueueStartupRefresh();
+            return;
+        }
+
+        base.SetVisibleCore(value);
+    }
+
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        QueueStartupRefresh();
+    }
+
+    private void QueueStartupRefresh()
+    {
+        if (_startupQueued) return;
+        _startupQueued = true;
         // Run after the form's handle and WindowsForms synchronization context exist.
         BeginInvoke((Action)(() =>
         {
             if (_exiting) return;
-            if (_settings.StartMinimized) MinimizeToTray();
             RefreshAsync();
         }));
     }
